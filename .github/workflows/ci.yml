@@ -13,7 +13,6 @@ permissions:
 
 env:
   TF_ACTIONS_WORKING_DIR: ./terraform
-  TF_VAR_newrelic_license_key: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
 
 jobs:
   fmt-and-validate:

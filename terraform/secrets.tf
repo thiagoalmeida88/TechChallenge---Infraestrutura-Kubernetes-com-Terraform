@@ -26,3 +26,11 @@ resource "aws_ssm_parameter" "jwt_secret" {
   value       = random_password.jwt_secret.result
   tags        = local.tags
 }
+
+resource "aws_ssm_parameter" "newrelic_license_key" {
+  name        = "/${var.project}/${var.environment}/newrelic/license-key"
+  description = "License key do New Relic, lida pelo deploy da aplicação (APM)."
+  type        = "SecureString"
+  value       = var.newrelic_license_key
+  tags        = local.tags
+}

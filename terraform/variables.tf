@@ -152,12 +152,8 @@ variable "cluster_creator_arn" {
 }
 
 variable "newrelic_license_key" {
-  description = "License key (Ingest) do New Relic. Vem do secret NEW_RELIC_LICENSE_KEY do GitHub."
+  description = "License key (Ingest) do New Relic. Vem do secret NEW_RELIC_LICENSE_KEY do GitHub. Vazia desliga o nri-bundle e o parâmetro SSM do APM (newrelic.tf)."
   type        = string
   sensitive   = true
-
-  validation {
-    condition     = length(var.newrelic_license_key) > 0
-    error_message = "newrelic_license_key vazia: defina TF_VAR_newrelic_license_key no workflow."
-  }
+  default     = ""
 }
