@@ -150,3 +150,10 @@ variable "cluster_creator_arn" {
     error_message = "cluster_creator_arn precisa ser nulo ou um ARN de role IAM (arn:aws:iam::<conta>:role/<nome>)."
   }
 }
+
+variable "newrelic_license_key" {
+  description = "License key (Ingest) do New Relic. Vem do secret NEW_RELIC_LICENSE_KEY do GitHub. Vazia desliga o nri-bundle e o parâmetro SSM do APM (newrelic.tf)."
+  type        = string
+  sensitive   = true
+  default     = ""
+}

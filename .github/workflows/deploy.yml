@@ -32,6 +32,7 @@ env:
   # staging de rodar contra o state de prod.
   AMBIENTE: ${{ github.ref == 'refs/heads/main' && 'prod' || 'staging' }}
   TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+  TF_VAR_newrelic_license_key: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
 
 jobs:
   plan:

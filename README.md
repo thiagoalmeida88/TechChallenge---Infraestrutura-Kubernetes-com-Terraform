@@ -6,6 +6,23 @@ IAM/OIDC**. Todo o ciclo de vida (criar, atualizar e destruir) é versionado aqu
 e executado pelo **GitHub Actions**, com o state no S3 e um ambiente por branch
 (`develop` → staging, `main` → produção).
 
+> Documentação arquitetural geral (diagrama de componentes, sequências, RFCs, ADRs e modelo
+> de dados): **[tech-challenge-docs](https://github.com/Jean-Carlo-Torres/tech-challenge-docs)**.
+
+## Propósito
+
+Provisionar a plataforma onde a aplicação roda e por onde todo o tráfego entra:
+
+1. **Rede** isolada por ambiente (VPC 3 AZ) com as tags que os outros repositórios usam
+   para descobri-la.
+2. **Cluster Kubernetes com escalabilidade** (EKS + managed node group + metrics-server
+   para o HPA).
+3. **API Gateway** (Kong) exposto por um NLB, com permissão para invocar a Lambda de
+   autenticação.
+4. **Contratos** publicados no SSM (segredo JWT e SG dos nós) para a aplicação, a Lambda
+   e o banco.
+5. **Bucket de state** compartilhado pelos repositórios Terraform (`bootstrap/`).
+
 ## Escopo
 
 Este repositório cuida **apenas** da infraestrutura de Kubernetes. Ele **não**
@@ -13,10 +30,81 @@ contém o código da aplicação, os manifestos Kustomize, nem o banco de dados:
 
 | Repositório | Responsabilidade |
 |---|---|
-| 1. Lambda | Function serverless |
+| 1. [TechChallange---Function-Serverless](https://github.com/DevKaue/TechChallange---Function-Serverless) | Function serverless de autenticação por CPF |
 | **2. Infraestrutura Kubernetes (este)** | VPC, ECR, EKS, addons, ALB Controller, Kong, IAM/OIDC |
-| 3. Infraestrutura do Banco Gerenciado | RDS PostgreSQL (Terraform) |
-| 4. Aplicação principal em Kubernetes | Código da API, Dockerfile, manifestos Kustomize e deploy no cluster |
+| 3. [tech-challenge-database-infra](https://github.com/DevKaue/tech-challenge-database-infra) | RDS PostgreSQL (Terraform) |
+| 4. [tech-challenge-app-](https://github.com/DevKaue/tech-challenge-app-) | Código da API, Dockerfile, manifestos Kustomize, rotas do Kong e deploy no cluster |
+| — [tech-challenge-docs](https://github.com/Jean-Carlo-Torres/tech-challenge-docs) | Documentação arquitetural geral |
+
+## Tecnologias utilizadas
+
+| Camada | Tecnologia | Uso |
+|---|---|---|
+| IaC | Terraform `~> 1.16` | Todo o ciclo de vida da infraestrutura |
+| Providers | `hashicorp/aws ~> 5.90`, `helm ~> 2.17`, `random ~> 3.6`, `tls ~> 4.0` | AWS, charts Helm, segredo JWT e thumbprint do OIDC |
+| Nuvem | AWS `us-east-1` | Região do AWS Academy |
+| Rede | Amazon VPC (3 AZs, NAT único) | Subnets públicas (NLB) e privadas (nós, Lambda, RDS) |
+| Kubernetes | Amazon EKS 1.35, managed node group AL2023 (2..4 nós em prod) | Cluster da aplicação e do gateway |
+| Módulo EKS | `terraform-aws-modules/eks` v20.37.2 (vendored, com patch para o AWS Academy) | Cluster, node group e access entries |
+| Addons | vpc-cni (network policy), coredns, kube-proxy, metrics-server, pod-identity, amazon-cloudwatch-observability | Rede, DNS, **HPA** e **Container Insights** |
+| API Gateway | Kong Ingress Controller (chart `kong/ingress` 0.24.0, Kong 3.9), DB-less, NLB, autoscaling 2..5 | Entrada única da API |
+| Load Balancer | AWS Load Balancer Controller (Helm + IRSA) | NLB do Kong |
+| Registro | Amazon ECR (tag imutável + lifecycle) | Imagens da aplicação |
+| Segredos | SSM Parameter Store | Segredo JWT e SG dos nós |
+| State | S3 (versionado, `use_lockfile`) | Um state por repositório/ambiente |
+| CI/CD | GitHub Actions (OIDC ou credenciais do lab) | `ci.yml`, `deploy.yml`, `destroy.yml` |
+
+## Arquitetura deste repositório
+
+```mermaid
+flowchart TB
+    classDef net fill:#dae8fc,stroke:#6c8ebf,color:#000
+    classDef k8s fill:#d5e8d4,stroke:#82b366,color:#000
+    classDef gw fill:#e1d5e7,stroke:#9673a6,color:#000
+    classDef data fill:#f8cecc,stroke:#b85450,color:#000
+    classDef ext fill:#f5f5f5,stroke:#666,color:#000
+    classDef mon fill:#ffe6cc,stroke:#d79b00,color:#000
+
+    GHA["GitHub Actions<br/>ci.yml · deploy.yml · destroy.yml"]:::ext
+    S3[("S3 techchallenge-tfstate-&lt;conta&gt;<br/>k8s/&lt;env&gt;/terraform.tfstate")]:::data
+
+    subgraph AWS["AWS · us-east-1"]
+        subgraph VPC["VPC techchallenge-&lt;env&gt; · 3 AZs (vpc.tf)"]
+            PUB["Subnets públicas<br/>kubernetes.io/role/elb"]:::net
+            PRIV["Subnets privadas<br/>kubernetes.io/role/internal-elb"]:::net
+            NAT["NAT Gateway único"]:::net
+            NLB["NLB do Kong"]:::gw
+            subgraph EKS["EKS techchallenge-&lt;env&gt; (eks.tf)"]
+                NG["Managed node group AL2023"]:::k8s
+                ADD["Addons: vpc-cni · coredns · kube-proxy<br/>metrics-server · pod-identity · cloudwatch-observability"]:::k8s
+                ALBC["AWS Load Balancer Controller<br/>(alb-controller.tf)"]:::k8s
+                KONG["Kong Ingress Controller DB-less<br/>namespace kong · HPA 2..5 (kong.tf)"]:::gw
+                APP["namespace da aplicação<br/>(criado pelo repo App)"]:::ext
+            end
+        end
+        ECR[("ECR techchallenge-api<br/>(ecr.tf)")]:::data
+        SSM["SSM<br/>/techchallenge/&lt;env&gt;/auth/jwt-secret<br/>/techchallenge/&lt;env&gt;/eks/node-sg-id<br/>(secrets.tf · discovery.tf)"]:::data
+        OIDC["IAM OIDC provider + roles de deploy<br/>(github-oidc.tf, fora do lab)"]:::ext
+        CW["CloudWatch Container Insights"]:::mon
+        LAMBDA["Lambda techchallenge-auth-&lt;env&gt;<br/>(repo Function)"]:::ext
+        RDS[("RDS (repo Database)<br/>acha a VPC por tag")]:::ext
+    end
+
+    GHA -->|"plan / apply"| AWS
+    GHA -.->|"state + lock"| S3
+    PUB --- NLB
+    NLB --> KONG
+    ALBC -.->|"provisiona"| NLB
+    PRIV --- NG
+    PRIV --- NAT
+    KONG -->|"plugin aws-lambda"| LAMBDA
+    KONG --> APP
+    ADD -->|"métricas e logs"| CW
+    SSM -.->|"node-sg-id"| RDS
+    SSM -.->|"jwt-secret"| LAMBDA
+```
+
+Detalhes por arquivo em [Estrutura](#estrutura).
 
 ### Contrato com os outros repositórios
 
@@ -211,6 +299,30 @@ No bucket do bootstrap, key `k8s/<env>/terraform.tfstate`, com lock nativo do S3
 (`use_lockfile`). Não há state anterior a migrar: o backend S3 antigo
 (`techchallenge-fiap-v1`) era de outra conta, e o primeiro apply de cada
 ambiente cria a infraestrutura do zero.
+
+## Dockerfile, Swagger/Postman e links dos deploys
+
+- **Dockerfile: não se aplica.** Este repositório só contém Terraform; não gera imagem.
+  O ECR que ele cria recebe a imagem buildada pelo repositório da aplicação.
+- **Swagger/Postman: não se aplica diretamente** — o repositório não expõe API própria,
+  mas é ele que cria o **endereço público da API** (NLB do Kong). Com o ambiente de pé:
+
+  ```bash
+  KONG_URL=$(kubectl -n kong get svc kong-gateway-proxy \
+    -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+  echo "Swagger da aplicação: http://$KONG_URL/api/docs"
+  echo "Login por CPF (Lambda): POST http://$KONG_URL/auth"
+  ```
+
+  O comando também sai no output `kong_proxy_hostname_command` e no resumo do run do
+  `deploy.yml`. Contratos: Swagger da
+  [aplicação](https://github.com/DevKaue/tech-challenge-app-#apis-swagger-e-links-dos-deploys)
+  e [OpenAPI](https://github.com/DevKaue/TechChallange---Function-Serverless/blob/main/docs/api/openapi.yaml) /
+  [Postman](https://github.com/DevKaue/TechChallange---Function-Serverless/blob/main/docs/postman/techchallenge-auth.postman_collection.json)
+  da Lambda.
+- **Deploy ativo:** o ambiente AWS (AWS Academy Learner Lab) **não está de pé no
+  momento**; o hostname do NLB é gerado a cada provisionamento, por isso não há link fixo.
+  O histórico de execuções fica em **Actions → Deploy** deste repositório.
 
 ## Regras de proteção (configurar no GitHub)
 
