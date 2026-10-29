@@ -160,6 +160,16 @@ data "aws_iam_policy_document" "github_app_deploy" {
     actions   = ["ssm:GetParameter"]
     resources = [aws_ssm_parameter.jwt_secret.arn]
   }
+
+  # Lê a license key do New Relic (newrelic.tf) para ligar o APM da API. ARN
+  # montado, não referência ao recurso: o parâmetro só existe com a chave
+  # configurada, e sem ele o deploy precisa receber ParameterNotFound (segue
+  # com APM desligado), não AccessDenied (derruba o deploy).
+  statement {
+    effect    = "Allow"
+    actions   = ["ssm:GetParameter"]
+    resources = ["arn:aws:ssm:${var.region}:${local.account_id}:parameter/${var.project}/${var.environment}/newrelic/license-key"]
+  }
 }
 
 resource "aws_iam_role_policy" "github_app_deploy" {
